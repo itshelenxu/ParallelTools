@@ -54,6 +54,47 @@ public:
   void unlock() { flag = false; }
 };
 
+
+// class ReaderWriterLock2 {
+//   std::atomic<int32_t> flag{0};
+
+// public:
+//   void read_lock(int cpuid){
+//     while(true){
+//       int32_t value = flag;
+//       if(value >= 0){
+//         bool success = flag.compare_exchange_weak(value, value+1, std::memory_order_acq_rel);
+//         if(success){
+//           return ;
+//         }
+//       } else {
+//         flag.wait(-1, std::memory_order_acq_rel);
+//       }
+//     }
+//   }
+
+//   void read_unlock(int cpuid){
+//     flag--;
+//     flag.notify_one();
+//   }
+
+//   void write_lock(){
+//     int32_t zero = 0;
+//     while(!flag.compare_exchange_weak(zero, -1, std::memory_order_acq_rel)){
+//       int32_t value = flag;
+//       if(value > 0){
+//         flag.wait(value, std::memory_order_acq_rel);
+//       }
+//     }
+//     return;
+//   }
+
+//   void write_unlock(){
+//     flag++;
+//     flag.notify_all();
+//   }
+// };
+
 template <int num_counters = 8> class partitioned_counter {
 
 #ifdef __cpp_lib_hardware_interference_size
@@ -163,3 +204,106 @@ private:
   std::atomic_flag writer{false};
   partitioned_counter<48> readers{};
 };
+
+
+
+
+class ReaderWriterLock2 {
+
+public:
+  ReaderWriterLock2() : writer(0), readers(0) {
+    static_assert(std::atomic<int32_t>::is_always_lock_free);
+  }
+
+  bool try_upgrade_release_on_fail(int cpuid) {
+    // acquire write lock.
+
+    if (writer.test_and_set()) {
+      readers--;
+      return false;
+    }
+
+    readers--;
+
+    // wait for readers to finish
+    while (readers) {
+    }
+
+    return true;
+  }
+
+  /**
+   * Try to acquire a lock and spin until the lock is available.
+   */
+  void read_lock(int cpuid = -1) {
+    
+    readers++;
+
+    while (writer.test(std::memory_order_relaxed)) {
+      readers--;
+      sched_yield();
+      // writer.wait(true, std::memory_order_relaxed);
+      readers++;
+    }
+  }
+
+  void read_unlock(int cpuid = -1) {
+    readers--;
+    return;
+  }
+
+  /**
+   * Try to acquire a write lock and spin until the lock is available.
+   * Then wait till reader count is 0.
+   */
+  void write_lock() {
+    // acquire write lock.
+    while (writer.test_and_set()) {
+      // writer.wait(true);
+    }
+    // wait for readers to finish
+    while (readers) {
+    }
+  }
+
+  void write_unlock(void) {
+    writer.clear(std::memory_order_release);
+    // writer.notify_all();
+    return;
+  }
+
+private:
+  std::atomic_flag writer{false};
+  std::atomic<uint8_t> readers{0};
+};
+
+
+
+
+
+// class ReaderWriterLock2 {
+//   std::atomic<bool> flag;
+
+// public:
+//   void write_lock() {
+//     bool success = false;
+
+//     while (!success) {
+//       bool value = false;
+//       success = flag.compare_exchange_weak(value, true, std::memory_order_acq_rel);
+//       if (success) {
+//         return;
+//       }
+//     }
+//   }
+
+
+//   void write_unlock() { flag = false; }
+
+//   void read_lock(int cpuid = -1){
+//     write_lock();
+//   }
+//   void read_unlock(int cpuid = -1){
+//     write_unlock();
+//   }
+// };
